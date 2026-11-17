@@ -1,4 +1,5 @@
 """DB id columns of ris_view_data / ris_trends_data, and the UPC lengths from master_upc_project."""
+import uuid
 from datetime import datetime
 
 import pandas as pd
@@ -52,9 +53,10 @@ def test_build_ris_view_data_ids_fallback_and_dropped_rows():
     assert {"created_at", "updated_at", "pavement_type", "defect_detected_on"} <= set(out.columns)
 
 
-def test_ris_view_data_id_is_deterministic():
+def test_ris_view_data_id_is_a_new_uuid_per_row():
     rows = view_dw(("N/1", "Pothole", None))
-    assert build_ris_view_data(rows, DB)["id"].item() == build_ris_view_data(rows, DB)["id"].item()
+    first, second = build_ris_view_data(rows, DB)["id"].item(), build_ris_view_data(rows, DB)["id"].item()
+    assert str(uuid.UUID(first)) == first and first != second              # random uuid4, as ris_trends_data
 
 
 def test_build_ris_trends_data():

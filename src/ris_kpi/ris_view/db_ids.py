@@ -10,13 +10,14 @@ Lookups come from the DB tables in RisView.DB_TABLES_DIR (ID_DB_TABLES, common/d
                                             = survey_system + asset_type + defect_name             -> id
                       (asset_type / defect_name from Defect_Type + pavement type, see defect_type_keys; when the
                       first key has no id, DEFECT_TYPE_FALLBACK is tried, e.g. Rutting: PAVEMENT -> Flexible Pavement)
-    id                md5 of ID_GRAIN (same record -> same id on every run)
+    id                random uuid4 per row (as ris_trends_data). Set when a survey's rows are inserted; an UPDATE
+                      run keeps the saved id (incremental.update_rows); a survey inserted again gets new ids
 
 Every lookup is de-duplicated on its key (keep first), so the joins never add rows; a row whose id is not found is
 kept with an empty id. populated_on -> created_at (KPI run time); updated_at = time of this run.
 """
-import hashlib
 import logging
+import uuid
 from datetime import datetime
 
 import numpy as np
@@ -34,7 +35,7 @@ RENAME_COLUMNS = {"populated_on": "created_at"}
 # Pavement type column of ris_view_dw (Cracking / Pothole only; empty -> Asphalt)
 PAVEMENT_COLUMNS = ["Pavement_Type", "pavement_type"]
 
-# id grain: UPC / upc_id / Phase / Cycle / Defect_Detected_On / Defect_Type / defect_type_id / survey_source_id
+# Row grain (checked for duplicate rows, logged): UPC / upc_id / Phase / Cycle / Defect_Detected_On / Defect_Type / defect_type_id / survey_source_id
 # + Status (+ the pavement type column, added to the grain when ris_view_dw has one), which split rows in ris_view_dw
 ID_GRAIN = ["UPC", "upc_id", "Phase", "Cycle", "Defect_Detected_On", "Defect_Type", "defect_type_id",
             "survey_source_id", "Status"]
@@ -116,16 +117,15 @@ def defect_type_keys(defect_type, pavement_type):
 
 
 def make_row_id(df, grain):
-    """md5('|'.join(grain)) per row. Empty values hash as ''; duplicates are logged, never dropped."""
-    key = df[grain].astype("string").fillna("").agg("|".join, axis=1)
-    ids = key.map(lambda s: hashlib.md5(s.encode("utf-8")).hexdigest())
-    dups = ids.duplicated(keep=False)
+    """Random uuid4 per row (as ris_trends_data). Rows that share the grain (empty values compare equal) are logged,
+    never dropped."""
+    dups = df[grain].astype("string").fillna("").duplicated(keep=False)
     if dups.any():
-        log.warning("id: %s row(s) share an id — grain %s is not unique:\n%s",
+        log.warning("id: %s row(s) share the grain %s — not unique:\n%s",
                     int(dups.sum()), grain, df.loc[dups, grain].to_string(index=False))
     else:
-        log.info("id: %s unique ids (md5 of %s)", f"{len(ids):,}", grain)
-    return ids
+        log.info("id: %s rows, grain %s unique", f"{len(df):,}", grain)
+    return [str(uuid.uuid4()) for _ in range(len(df))]
 
 
 def _defect_type_fallback(df, type_lk):
@@ -200,7 +200,7 @@ def build_ris_view_data(ris_view_dw, db_tables):
     df = df.rename(columns=RENAME_COLUMNS)
     df["updated_at"] = datetime.now()
 
-    # 6. id — deterministic md5 of the grain
+    # 6. id — unique uuid4 per row
     df["id"] = make_row_id(df, ID_GRAIN + ([pav_col] if pav_col else []))
     if len(df) != n_rows:
         raise AssertionError("row count changed")

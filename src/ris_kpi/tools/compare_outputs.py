@@ -4,8 +4,7 @@
 
 Cells are compared as the text written to the CSV, so any change in a value, its formatting, a column or the row
 order is reported. Columns that change on every run are left out by default (DEFAULT_IGNORE): the run times
-populated_on / created_at / updated_at, and id (a random uuid in ris_trends_data; in ris_view_data an md5 of columns
-that are compared anyway). Run both versions with the same input_data, the same starting output_data (e.g. none:
+populated_on / created_at / updated_at, and id (a random uuid in ris_trends_data and ris_view_data). Run both versions with the same input_data, the same starting output_data (e.g. none:
 ris_view_data / ris_trends_data are read back and only updated) and the same pandas version, otherwise differences
 that are not caused by the code can show up.
 """

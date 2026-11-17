@@ -198,7 +198,7 @@ no row is added; a row whose id is not found is kept with an empty id and its ke
 | `survey_source_id` | `master_survey_system` | `Source_System` = `system_code` | `id` |
 | `survey_id` | `survey_data_map` | `UPC` + `Phase` + `Cycle` + `Defect_Detected_On` = `upc` + `phase` + `cycle` + `survey_date` | `survey_schedule_id` |
 | `defect_type_id` | `master_defect_type` | `Source_System` + asset_type + defect_name = `survey_system` + `asset_type` + `defect_name` | `id` |
-| `id` | — | — | md5 of `UPC\|upc_id\|Phase\|Cycle\|Defect_Detected_On\|Defect_Type\|defect_type_id\|survey_source_id\|Status\|Pavement_Type` (same record -> same id) |
+| `id` | — | — | random uuid4 per row (as `ris_trends_data`), set when the survey's rows are inserted; UPDATE runs keep it |
 
 asset_type / defect_name: Pothole -> `Flexible Pavement` / `Pothole`; Cracking -> `Flexible Pavement` / `Cracking`
 (on Cement Concrete: `Rigid Pavements` / `Pothole` and `Rigid Pavements` / `Crack on Rigid Pavement`); Roughness /
@@ -246,8 +246,8 @@ ris-kpi compare output_data_before output_data                            # exit
 ```
 
 The compare checks every CSV under both folders (dated copies and `latest/`) and leaves out `populated_on`,
-`created_at`, `updated_at` (run times) and `id` (random in `ris_trends_data`; in `ris_view_data` an md5 of compared
-columns). Unit tests (`pytest`) use an in-memory S3 stand-in, no AWS access.
+`created_at`, `updated_at` (run times) and `id` (a random uuid in `ris_trends_data` and
+`ris_view_data`). Unit tests (`pytest`) use an in-memory S3 stand-in, no AWS access.
 
 ## Layout
 

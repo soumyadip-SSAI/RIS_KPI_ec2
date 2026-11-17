@@ -94,7 +94,7 @@ def test_update_rows_changes_only_update_columns_and_touches_changed_rows():
     out = inc.update_rows(base, fresh, inc.RIS_VIEW_KEY, inc.RIS_VIEW_UPDATE, "t", touch=("updated_at", "T1"))
     assert out["total_defects_ca"].tolist() == ["5", "1", "7"]
     assert out["updated_at"].tolist() == ["T1", "2026-11-01", "2026-11-01"]  # only the changed row
-    assert out["id"].tolist() == base["id"].tolist() and (out["created_at"] == "2026-11-01").all()
+    assert out["id"].tolist() == base["id"].tolist() and (out["created_at"] == "2026-11-01").all()  # saved ids kept
     assert len(out) == 3                                                       # B (no saved row) not inserted
 
 
