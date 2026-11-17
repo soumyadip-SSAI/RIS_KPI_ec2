@@ -9,6 +9,9 @@ For every table:
   2. Rows are matched on `id`:
        id already in the DB -> UPDATE every pushed column except id and created_at
        id not in the DB     -> INSERT the whole row (pushed columns)
+     created_at / updated_at are set from the time of this run, not taken from the CSV:
+       UPDATE: updated_at = run time; created_at is not changed (the DB keeps its value)
+       INSERT: created_at = updated_at = run time
   3. DRY_RUN (default True): nothing is written. The DB is only read (SELECT), every value is cast to its DB column type
      (so a value the DB would reject is reported now), and the planned changes are saved to dry_run_output/:
        <table>_insert.csv            rows that would be inserted
@@ -32,6 +35,7 @@ import os
 import re
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import boto3
@@ -39,6 +43,8 @@ import pandas as pd
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import execute_values
+
+from date_format import fix_date_columns      # db_push/date_format.py: defect_detected_on -> yyyy-mm-dd
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Settings
@@ -52,7 +58,10 @@ TABLES = {
     "ris_trends": {"source": f"{S3_LATEST}/ris_trends_data.csv", "table": "ris_trends_kpi", "drop": ["phase", "cycle"]},
 }
 KEY = "id"                                 # rows are matched on this column
-NOT_UPDATED = {"id", "created_at"}         # never changed on an UPDATE
+CREATED_AT, UPDATED_AT = "created_at", "updated_at"
+NOT_UPDATED = {KEY, CREATED_AT}            # never changed on an UPDATE
+# Time of this run (UTC), used for created_at / updated_at instead of the CSV values
+RUN_TIME = datetime.now(timezone.utc).isoformat(sep=" ")
 PAGE_SIZE = 1000                           # rows per SQL statement
 HERE = Path(__file__).resolve().parent
 ENV_FILE = HERE / ".env"
@@ -188,6 +197,7 @@ def plan_table(cur, name, cfg, schema, source):
     dropped = [c for c in cfg["drop"] if c in df.columns]
     df = df.drop(columns=dropped)
     print(f"CSV: {len(df):,} rows, {len(df.columns)} columns" + (f" (not pushed: {dropped})" if dropped else ""))
+    df = fix_date_columns(df)
 
     columns = db_columns(cur, schema, table)
     if not columns:
@@ -208,9 +218,15 @@ def plan_table(cur, name, cfg, schema, source):
     if KEY not in pushed:
         print(f"!! '{KEY}' is not in both the CSV and the DB table - table skipped")
         return None
-    update_cols = [c for c in pushed if c not in NOT_UPDATED]
-
     df = normalise(df[pushed], columns)
+
+    # created_at / updated_at: from the run time (added when the DB has them, even if the CSV does not)
+    stamps = [c for c in (CREATED_AT, UPDATED_AT) if c in columns and columns[c]["writable"]]
+    for col in stamps:
+        if col not in pushed:
+            pushed.append(col)
+            df[col] = None
+    update_cols = [c for c in pushed if c not in NOT_UPDATED]
 
     no_id = df[KEY].isna()
     if no_id.any():
@@ -224,12 +240,17 @@ def plan_table(cur, name, cfg, schema, source):
 
     in_db = existing_ids(cur, schema, table)
     is_update = df[KEY].isin(in_db)
-    inserts, updates = df[~is_update], df[is_update]
+    inserts = df[~is_update].assign(**{c: RUN_TIME for c in stamps})                        # created + updated
+    updates = df[is_update].assign(**{c: RUN_TIME for c in stamps if c == UPDATED_AT})      # updated only
     print(f"DB table: {len(in_db):,} rows. Plan: INSERT {len(inserts):,} rows (new {KEY}), "
           f"UPDATE {len(updates):,} rows (matching {KEY}; columns {update_cols})")
+    if stamps:
+        print(f"Run time {RUN_TIME}: INSERT -> {' + '.join(stamps)}; "
+              f"UPDATE -> {UPDATED_AT if UPDATED_AT in stamps else 'nothing'} ({CREATED_AT} kept in the DB)")
 
     plan = {"name": name, "table": table, "schema": schema, "columns": columns, "pushed": pushed,
-            "update_cols": update_cols, "inserts": inserts, "updates": updates, "ok": True}
+            "update_cols": update_cols, "update_values": [KEY] + update_cols,
+            "inserts": inserts, "updates": updates, "ok": True}
 
     # NOT NULL checks (the DB would reject the statement)
     for col in pushed:
@@ -266,8 +287,7 @@ def foreign_keys(cur, schema, table):
 
 def check_foreign_keys(cur, plan):
     """Every pushed value of a foreign-key column must exist in the referenced table (else the DB rejects the row)."""
-    rows = pd.concat([plan["inserts"], plan["updates"][[c for c in plan["pushed"] if c in plan["update_cols"]
-                                                         or c == KEY]]])
+    rows = pd.concat([plan["inserts"], plan["updates"][plan["update_values"]]])
     for col, ref_schema, ref_table, ref_col in foreign_keys(cur, plan["schema"], plan["table"]):
         if col not in plan["pushed"]:
             continue
@@ -305,24 +325,25 @@ def check_inserts(cur, plan):
 
 def diff_updates(cur, plan):
     """Per updated row and column: DB value vs new value (compared in the DB after the cast, so 1.0 = 1)."""
-    updates, pushed, update_cols = plan["updates"], plan["pushed"], plan["update_cols"]
+    updates, cols = plan["updates"], plan["update_values"]
+    compared = [c for c in plan["update_cols"] if c != UPDATED_AT]   # updated_at: run time on every updated row
     plan["changes"] = pd.DataFrame(columns=[KEY, "column", "db_value", "new_value"])
-    if updates.empty or not update_cols:
+    if updates.empty or not plan["update_cols"]:
         return
     t, v = sql.Identifier("t"), sql.Identifier("v")
     selects = sql.SQL(", ").join(
         sql.SQL("{t}.{c}::text, {v}.{c}::text, {t}.{c} IS DISTINCT FROM {v}.{c}").format(t=t, v=v, c=sql.Identifier(c))
-        for c in update_cols)
+        for c in compared) if compared else sql.SQL("NULL")
     query = sql.SQL("SELECT {v}.{key}::text, {selects} FROM (VALUES %s) AS v({cols}) "
                     "JOIN {schema}.{table} AS t ON {t}.{key} = {v}.{key}").format(
-        t=t, v=v, key=sql.Identifier(KEY), selects=selects, cols=ident_list(pushed),
+        t=t, v=v, key=sql.Identifier(KEY), selects=selects, cols=ident_list(cols),
         schema=sql.Identifier(plan["schema"]), table=sql.Identifier(plan["table"])).as_string(cur)
     changes = []
     try:
-        for part in chunks(rows_of(updates, pushed)):
-            for row in execute_values(cur, query, part, template=values_template(pushed, plan["columns"]),
+        for part in chunks(rows_of(updates, cols)):
+            for row in execute_values(cur, query, part, template=values_template(cols, plan["columns"]),
                                       page_size=len(part), fetch=True):
-                for i, col in enumerate(update_cols):
+                for i, col in enumerate(compared):
                     db_value, new_value, changed = row[1 + 3 * i: 4 + 3 * i]
                     if changed:
                         changes.append((row[0], col, db_value, new_value))
@@ -335,7 +356,8 @@ def diff_updates(cur, plan):
     plan["changes"] = changes
     n_changed = changes[KEY].nunique()
     print(f"Update values: all {len(updates):,} rows cast to the DB column types; {n_changed:,} rows have a "
-          f"different value, {len(updates) - n_changed:,} are already the same")
+          f"different value, {len(updates) - n_changed:,} are already the same (not counting {UPDATED_AT}, "
+          "set to the run time on every updated row)")
     if not changes.empty:
         print("Changed cells per column: " + ", ".join(f"{c}={n:,}" for c, n in
                                                          changes["column"].value_counts().items()))
@@ -363,25 +385,27 @@ def report(plan):
 def write_table(cur, plan):
     """UPDATE matching ids, INSERT new ids. Returns (updated, inserted) row counts."""
     schema, table, pushed, update_cols = plan["schema"], plan["table"], plan["pushed"], plan["update_cols"]
-    template = values_template(pushed, plan["columns"])
+    update_values = plan["update_values"]           # id + updated columns (created_at not sent on an UPDATE)
     target = sql.SQL("{}.{}").format(sql.Identifier(schema), sql.Identifier(table))
     updated = inserted = 0
 
     if not plan["updates"].empty and update_cols:
         query = sql.SQL("UPDATE {target} AS t SET {sets} FROM (VALUES %s) AS v({cols}) "
                         "WHERE t.{key} = v.{key}").format(
-            target=target, cols=ident_list(pushed), key=sql.Identifier(KEY),
+            target=target, cols=ident_list(update_values), key=sql.Identifier(KEY),
             sets=sql.SQL(", ").join(sql.SQL("{c} = v.{c}").format(c=sql.Identifier(c)) for c in update_cols)
         ).as_string(cur)
-        for part in chunks(rows_of(plan["updates"], pushed)):
-            execute_values(cur, query, part, template=template, page_size=len(part))
+        for part in chunks(rows_of(plan["updates"], update_values)):
+            execute_values(cur, query, part, template=values_template(update_values, plan["columns"]),
+                           page_size=len(part))
             updated += cur.rowcount
 
     if not plan["inserts"].empty:
         query = sql.SQL("INSERT INTO {target} ({cols}) VALUES %s").format(target=target, cols=ident_list(pushed)) \
             .as_string(cur)
         for part in chunks(rows_of(plan["inserts"], pushed)):
-            execute_values(cur, query, part, template=template, page_size=len(part))
+            execute_values(cur, query, part, template=values_template(pushed, plan["columns"]),
+                           page_size=len(part))
             inserted += cur.rowcount
     return updated, inserted
 
