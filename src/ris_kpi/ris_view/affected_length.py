@@ -25,14 +25,16 @@ Total rows -> summed from total_affected_length_<std> of final_intermediate per 
               'Closed' only when roughness / rutting / cracking status are all Closed, else 'Open' (empty
               status counts as Open)
 
-Grain: upc / source_system / detected_on / phase / cycle (pavement_type is not used: final_intermediate
-takes it from master_chainage, which does not match the pavement types of the defect tables).
+Grain: upc / source_system / detected_on / phase / cycle + defect_type + pavement_type + status. pavement_type is the
+pavement group of defect_counts.py (Cracking / Pothole: 'Cement Concrete' / 'Asphalt', others empty): from the
+silver row's pavement_type for silver lengths, from the final_intermediate row's pavement_type (master_chainage) for
+intermediate lengths. Total rows are not split by pavement.
 """
 import logging
 
 import pandas as pd
 
-from ris_kpi.ris_view.defect_counts import COUNT_COLS, NO_STATUS_AS, STATUSES
+from ris_kpi.ris_view.defect_counts import COUNT_COLS, NO_STATUS_AS, PAVEMENT, STATUSES, pavement_group
 from ris_kpi.ris_view.project_master import PROJECT_COLUMNS
 
 log = logging.getLogger(__name__)
@@ -66,6 +68,8 @@ FIXED_LENGTH_M = {"Pothole": 1}  # fixed length per row (pothole affected_length
 CA, IRC = "As per CA", "As per IRC"
 
 UPC_GRAIN = ["upc", "source_system", "detected_on", "phase", "cycle"]
+# Defect row key: UPC grain + defect type + pavement group + status
+DEFECT_KEY = UPC_GRAIN + ["defect_type", PAVEMENT, "status"]
 
 
 def _with_km(out):
@@ -80,8 +84,9 @@ def intermediate_defect_lengths(intermediate):
     rows = intermediate.rename(columns={"defect_detected_on": "detected_on"})
     parts = []
     for defect, (ca_col, irc_col, status_col) in DEFECT_LENGTH_COLUMNS.items():
-        part = (rows.assign(status=rows[status_col].astype("string").fillna(NO_STATUS_AS))
-                .groupby(UPC_GRAIN + ["status"], dropna=False)
+        part = (rows.assign(status=rows[status_col].astype("string").fillna(NO_STATUS_AS),
+                            **{PAVEMENT: pavement_group(defect, rows[PAVEMENT] if PAVEMENT in rows else None)})
+                .groupby(UPC_GRAIN + [PAVEMENT, "status"], dropna=False)
                 .agg(affected_length_ca_m=(ca_col, "sum"), affected_length_irc_m=(irc_col, "sum"))
                 .astype("float64").reset_index())
         parts.append(part.assign(defect_type=defect))
@@ -111,6 +116,7 @@ def _silver_rows(name, df):
     ca_row, irc_row = rows["threshold_name"] == CA, rows["threshold_name"] == IRC
     return pd.DataFrame({
         **{c: rows[c] for c in UPC_GRAIN + ["defect_type"]},
+        PAVEMENT: pavement_group(rows["defect_type"], rows[PAVEMENT] if PAVEMENT in rows else None),
         "status": rows["final_status"].astype("string").fillna(NO_STATUS_AS),
         "affected_length_ca_m": length.where(ca_row, 0.0),
         # parents: the 'As per CA' row is the only row and counts for IRC too
@@ -121,7 +127,7 @@ def _silver_rows(name, df):
 def silver_defect_lengths(tables):
     """Cracking / pothole lengths per UPC grain + defect_type + status from the silver tables with status."""
     rows = pd.concat([_silver_rows(name, df) for name, df in tables.items()], ignore_index=True)
-    return (rows.groupby(UPC_GRAIN + ["defect_type", "status"], dropna=False)
+    return (rows.groupby(DEFECT_KEY, dropna=False)
             [["affected_length_ca_m", "affected_length_irc_m"]].sum().reset_index())
 
 
@@ -142,7 +148,7 @@ def attach_defect_lengths(counts, tables, intermediate):
     lengths = _with_km(_pick_sources(lengths).drop(columns="source"))
     log.info("aff_len_df — %s rows (sources per defect / status: LENGTH_SOURCE)", f"{len(lengths):,}")
 
-    out = counts.merge(lengths, on=UPC_GRAIN + ["defect_type", "status"], how="left", validate="one_to_one")
+    out = counts.merge(lengths, on=DEFECT_KEY, how="left", validate="one_to_one")
     out[LENGTH_COLS] = out[LENGTH_COLS].fillna(0)
     log.info("ris_view_df5 — %s rows × %s cols", f"{len(out):,}", out.shape[1])
     return out
@@ -152,7 +158,7 @@ def subtract_closed_from_open(defect_rows):
     """For SUBTRACT_CLOSED_FROM_OPEN defects: Open affected length (m, km) = Open - Closed of the same UPC grain,
     CA and IRC separately; a negative result is logged and set to 0."""
     out = defect_rows.copy()
-    key = UPC_GRAIN + ["defect_type"]
+    key = UPC_GRAIN + ["defect_type", PAVEMENT]
     target = out["defect_type"].isin(SUBTRACT_CLOSED_FROM_OPEN)
     is_open = (target & (out["status"] == "Open")).to_numpy()
     m_cols = ["affected_length_ca_m", "affected_length_irc_m"]

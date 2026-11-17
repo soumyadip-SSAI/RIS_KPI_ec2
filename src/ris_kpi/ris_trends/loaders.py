@@ -42,21 +42,16 @@ def load_silver_tables(input_dir, table_names=SILVER_TABLES):
     return tables
 
 
-def load_contract_upcs(path, enabled=True):
-    """Set of UPCs in the contract-module project master, or None when the filter is switched off."""
+def load_contract_upcs(master_upc_project, enabled=True):
+    """Set of UPCs in the master_upc_project table, or None when the filter is switched off."""
     if not enabled:
-        log.warning("RisTrends.FILTER_BY_PROJECT_MASTER = False (ris_kpi/config.py): UPCs are NOT filtered against the project master")
+        log.warning("RisTrends.FILTER_BY_PROJECT_MASTER = False (ris_kpi/config.py): UPCs are NOT filtered against "
+                    "master_upc_project")
         return None
-    if path is None:
-        raise ValueError("FILTER_BY_PROJECT_MASTER = True requires RisTrends.PROJECT_MASTER_PATH in ris_kpi/config.py")
-    cm_df = read_table_file(path)
-    # Accept 'UPC' (Databricks Excel / project_master.xlsx) or 'upc'
-    upc_col = next((c for c in cm_df.columns if str(c).lower() == "upc"), None)
-    if upc_col is None:
-        raise ValueError(f"No UPC column in {path}")
-    log.info("cm_df loaded — %s rows × %s cols | unique UPCs: %s",
-             f"{cm_df.shape[0]:,}", cm_df.shape[1], cm_df[upc_col].nunique())
-    return set(cm_df[upc_col].dropna().unique())
+    upc = master_upc_project["upc"]
+    upcs = set(upc.dropna().astype(str).str.strip())
+    log.info("master_upc_project — %s rows | unique UPCs: %s", f"{len(upc):,}", f"{len(upcs):,}")
+    return upcs
 
 
 def load_threshold_mapping(input_dir, table_name):

@@ -1,4 +1,4 @@
-"""Final ris_trends_dw table (Primary_ID is created when the output is pushed to the DB)."""
+"""Final ris_trends_dw table (kept in memory; ris_trends/db_ids.py adds the DB ids and the id column -> ris_trends_data)."""
 from datetime import datetime
 
 FINAL_COLUMNS = [

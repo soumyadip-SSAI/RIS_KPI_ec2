@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ris-kpi"
 version = "1.0.0"
-description = "RIS KPI tables (ris_view_dw, ris_trends_dw) for the NHAI DHMS programme"
+description = "RIS KPI tables (ris_view_data, ris_trends_data) for the NHAI DHMS programme"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

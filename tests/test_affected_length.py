@@ -48,9 +48,15 @@ GRAIN = {"upc": "U", "source_system": "S", "detected_on": "d", "phase": "1", "cy
 
 
 def rows(*items):
-    return pd.DataFrame([{**GRAIN, "defect_type": d, "status": s, "affected_length_ca_m": ca,
-                          "affected_length_irc_m": irc, "affected_length_ca_km": ca / 1000,
-                          "affected_length_irc_km": irc / 1000} for d, s, ca, irc in items])
+    """(defect_type, status, ca_m, irc_m[, pavement_type]) per row; pavement_type defaults to Asphalt for Cracking /
+    Pothole and '' for the other defects (pavement_group in defect_counts.py)."""
+    out = []
+    for d, s, ca, irc, *pav in items:
+        pavement = pav[0] if pav else ("Asphalt" if d in ("Cracking", "Pothole") else "")
+        out.append({**GRAIN, "defect_type": d, "pavement_type": pavement, "status": s, "affected_length_ca_m": ca,
+                    "affected_length_irc_m": irc, "affected_length_ca_km": ca / 1000,
+                    "affected_length_irc_km": irc / 1000})
+    return pd.DataFrame(out)
 
 
 def test_cracking_open_minus_closed_other_defects_untouched():
@@ -66,6 +72,16 @@ def test_cracking_open_minus_closed_other_defects_untouched():
 def test_cracking_open_clipped_at_zero():
     out = subtract_closed_from_open(rows(("Cracking", "Open", 50, 0), ("Cracking", "Closed", 80, 0)))
     assert out.loc[out["status"] == "Open", "affected_length_ca_m"].item() == 0
+
+
+def test_cracking_open_minus_closed_per_pavement_type():
+    out = subtract_closed_from_open(rows(("Cracking", "Open", 500, 0, "Asphalt"),
+                                         ("Cracking", "Closed", 200, 0, "Asphalt"),
+                                         ("Cracking", "Open", 100, 0, "Cement Concrete"),
+                                         ("Cracking", "Closed", 30, 0, "Cement Concrete")))
+    got = out.set_index(["pavement_type", "status"])["affected_length_ca_m"]
+    assert got[("Asphalt", "Open")] == 300
+    assert got[("Cement Concrete", "Open")] == 70
 
 
 def test_pick_sources_follows_length_source():

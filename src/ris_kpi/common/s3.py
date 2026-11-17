@@ -69,3 +69,15 @@ def downloaded(uri):
 def upload(path, uri):
     bucket, key = split_s3_uri(uri)
     get_client().upload_file(str(path), bucket, key)
+
+
+def list_uris(prefix_uri):
+    """Every object URI under s3://bucket/prefix/ (needs s3:ListBucket on that prefix)."""
+    bucket, prefix = split_s3_uri(prefix_uri)
+    prefix = prefix.rstrip("/") + "/"
+    pages = get_client().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
+    return [f"s3://{bucket}/{obj['Key']}" for page in pages for obj in page.get("Contents", [])]
+
+
+def is_access_denied(exc):
+    return _error_code(exc) in {"403", "AccessDenied"}

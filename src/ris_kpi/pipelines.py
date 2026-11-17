@@ -2,11 +2,16 @@
 
     run_full()   ris_view -> ris_trends
 
-ris_view reads the defect status tables straight from S3; ris_trends uses only the silver tables.
-When only defect statuses changed, run the RIS view alone (ris_kpi.ris_view.run_ris_view / `ris-kpi ris-view`).
+Both read the DB tables straight from S3 (DB_TABLES_DIR, written there by the DB export job); ris_trends needs them
+only for the id columns, not the defect statuses. When only defect statuses changed, run the RIS view alone
+(ris_kpi.ris_view.run_ris_view / `ris-kpi status-update`).
+
+Outputs are saved under <root>/year=YYYY/month=MM/day=DD/ for the run date and copied to <root>/latest/; one run time
+is used for both steps (run date folder, created_at / updated_at).
 """
 import logging
 import time
+from datetime import datetime
 
 from ris_kpi.ris_trends import run_ris_trends
 from ris_kpi.ris_view import run_ris_view
@@ -15,19 +20,22 @@ log = logging.getLogger(__name__)
 
 # name -> (function, steps it depends on); run in this order
 STEPS = {
-    # S3 status tables + old_silver_data -> silver_data_with_status -> final_intermediate -> ris_view_dw.csv
+    # S3 DB tables + old_silver_data -> silver_data_with_status -> final_intermediate -> ris_view_data
+    # (scenario 1: insert new surveys, then update all | scenario 2: update all)
     "ris_view": (run_ris_view, []),
-    # old_silver_data -> ris_trends_dw.csv
+    # old_silver_data + S3 DB tables (ids) -> ris_trends_data (rows of new surveys appended)
     "ris_trends": (run_ris_trends, []),
 }
 
 
-def run_full(only=None, keep_going=False):
+def run_full(only=None, keep_going=False, run_time=None):
     """Run the steps in order. Returns {step: (status, seconds, error)} with status OK / FAILED / SKIPPED.
 
     only:        run only these steps; a dependency that is not selected counts as done (its earlier output is used)
     keep_going:  after a failure, still run the steps that do not depend on the failed one
+    run_time:    time of the run (default: now)
     """
+    run_time = run_time or datetime.now()
     selected = [name for name in STEPS if not only or name in only]
     results = {}
 
@@ -42,7 +50,7 @@ def run_full(only=None, keep_going=False):
         log.info("%s %s %s", "=" * 25, name, "=" * 25)
         start = time.time()
         try:
-            func()
+            func(run_time=run_time)
             results[name] = ("OK", time.time() - start, "")
         except Exception as e:
             log.exception("%s FAILED", name)

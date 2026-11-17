@@ -1,4 +1,4 @@
-"""Silver defect ids per 10m row of final_intermediate, from the tables in SILVER_STATUS_DIR.
+"""Silver defect ids per 10m row of final_intermediate, from the silver status tables (SILVER_STATUS_ROOT).
 
 Matched on upc / source_system / phase / cycle / lane ('As per CA' rows only):
   roughness / rutting / ravelling parent -> parent window: parent_start_chainage <= start_chainage < parent_end_chainage

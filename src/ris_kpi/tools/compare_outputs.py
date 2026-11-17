@@ -3,8 +3,11 @@
     ris-kpi compare output_data_before output_data
 
 Cells are compared as the text written to the CSV, so any change in a value, its formatting, a column or the row
-order is reported. populated_on (the run time) is left out by default. Run both versions with the same input_data
-and the same pandas version, otherwise formatting differences can show up.
+order is reported. Columns that change on every run are left out by default (DEFAULT_IGNORE): the run times
+populated_on / created_at / updated_at, and id (a random uuid in ris_trends_data; in ris_view_data an md5 of columns
+that are compared anyway). Run both versions with the same input_data, the same starting output_data (e.g. none:
+ris_view_data / ris_trends_data are read back and only updated) and the same pandas version, otherwise differences
+that are not caused by the code can show up.
 """
 import logging
 from pathlib import Path
@@ -14,6 +17,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 MAX_REPORTED_ROWS = 5
+DEFAULT_IGNORE = ("populated_on", "created_at", "updated_at", "id")
 
 
 def _read(path, ignore_columns):
@@ -48,7 +52,7 @@ def compare_frames(old, new, sort_rows=False):
     return problems
 
 
-def compare_dirs(old_dir, new_dir, ignore_columns=("populated_on",), sort_rows=False):
+def compare_dirs(old_dir, new_dir, ignore_columns=DEFAULT_IGNORE, sort_rows=False):
     """True when both folders hold the same CSV files with the same content."""
     old_dir, new_dir = Path(old_dir), Path(new_dir)
     old_files = {p.relative_to(old_dir) for p in old_dir.rglob("*.csv")}

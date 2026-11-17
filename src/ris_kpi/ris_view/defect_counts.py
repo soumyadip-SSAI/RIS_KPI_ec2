@@ -7,6 +7,10 @@ counts as NO_STATUS_AS.
 IRC counts of ravelling / roughness / rutting come from their child 10m tables (the parent tables
 only have 'As per CA' rows): the child's 'As per IRC' rows take the final_status of their parent,
 matched on PARENT_KEYS. CA counts of these defects stay on the parent rows.
+
+Pavement grain: Cracking / Pothole (POINT_DEFECTS) are split by the row's pavement_type into 'Cement Concrete' and
+'Asphalt' (Hybrid / other / empty -> 'Asphalt'), since their defect_type_id depends on it; the other defect types are
+not split (pavement_type NO_PAVEMENT).
 """
 import logging
 
@@ -14,7 +18,8 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-GRAIN_COLS = ["source_system", "upc", "phase", "cycle", "detected_on", "defect_type", "zone", "status"]
+PAVEMENT = "pavement_type"
+GRAIN_COLS = ["source_system", "upc", "phase", "cycle", "detected_on", "defect_type", PAVEMENT, "zone", "status"]
 DETAIL_COLS = ["defect_id", "affected_length_ca", "affected_length_irc", "breach_flag", "threshold_name"]
 COUNT_COLS = ["Total_Defects_IRC", "Total_Defects_CA"]
 
@@ -26,8 +31,28 @@ CA = "As per CA"
 # Child 10m row -> its parent. parent_id alone repeats across cycles; no pavement_type, because
 # children of a 'Hybrid' parent are 'Asphalt' / 'Cement Concrete'.
 PARENT_KEYS = ["parent_id", "zone", "phase", "cycle", "source_system", "detected_on"]
-BASE_COLS = [c for c in GRAIN_COLS if c != "status"]
+# Columns taken from the tables as they are (status and the pavement group are derived)
+BASE_COLS = [c for c in GRAIN_COLS if c not in ("status", PAVEMENT)]
 CHILD_COLUMNS = list(dict.fromkeys(BASE_COLS + DETAIL_COLS + PARENT_KEYS))  # columns read from child tables
+
+
+# Defect types split by pavement (their defect_type_id depends on it); others get NO_PAVEMENT
+POINT_DEFECTS = {"Cracking", "Pothole"}
+CONCRETE_NAMES = {"cement concrete", "cememt concrete"}
+CONCRETE, ASPHALT, NO_PAVEMENT = "Cement Concrete", "Asphalt", ""
+
+
+def pavement_group(defect_type, pavement):
+    """Pavement grain of a defect row: POINT_DEFECTS -> 'Cement Concrete' / 'Asphalt' (Hybrid / other / empty),
+    other defect types -> NO_PAVEMENT. defect_type: Series or a single defect name; pavement: Series or None."""
+    index = pavement.index if pavement is not None else defect_type.index
+    if pavement is None:
+        pavement = pd.Series(pd.NA, index=index, dtype="string")
+    concrete = pavement.astype("string").str.strip().str.lower().isin(CONCRETE_NAMES).fillna(False).astype(bool)
+    point = (defect_type.isin(POINT_DEFECTS) if isinstance(defect_type, pd.Series)
+             else pd.Series(defect_type in POINT_DEFECTS, index=index))
+    group = pd.Series(ASPHALT, index=index, dtype="object").where(~concrete, CONCRETE)
+    return group.where(point.to_numpy(), NO_PAVEMENT)
 
 
 def child_irc_rows(name, parent, child):
@@ -56,17 +81,23 @@ def combine_defects(tables, children=None):
     children = children or {}
     missing = [name for name, df in tables.items() if "final_status" not in df.columns]
     if missing:
-        raise ValueError(f"No final_status column in {', '.join(missing)} — RisView.SILVER_STATUS_DIR (ris_kpi/config.py) must be "
-                         "silver_data_with_status (output of ris_view/silver_status.py)")
+        raise ValueError(f"No final_status column in {', '.join(missing)} — the tables must be the saved silver status "
+                         "(SILVER_STATUS_ROOT in ris_kpi/config.py, output of ris_view/silver_status.py)")
 
     cols = BASE_COLS + DETAIL_COLS + ["final_status"]
+
+    def with_pavement(rows):
+        source = rows[PAVEMENT] if PAVEMENT in rows.columns else None
+        return rows[cols].assign(**{PAVEMENT: pavement_group(rows["defect_type"], source)})
+
     frames = []
     for name, df in tables.items():
         if name in children:
-            frames.append(df.loc[df["threshold_name"] == CA, cols])
-            frames.append(child_irc_rows(name, df, children[name])[cols])
+            frames.append(with_pavement(df.loc[df["threshold_name"] == CA]))
+            # IRC child rows: line defects only, never split by pavement
+            frames.append(child_irc_rows(name, df, children[name])[cols].assign(**{PAVEMENT: NO_PAVEMENT}))
         else:
-            frames.append(df[cols])
+            frames.append(with_pavement(df))
     combined = pd.concat(frames, ignore_index=True)
     combined["status"] = combined["final_status"].astype("string").fillna(NO_STATUS_AS)
     combined = combined[GRAIN_COLS + DETAIL_COLS].drop_duplicates().reset_index(drop=True)

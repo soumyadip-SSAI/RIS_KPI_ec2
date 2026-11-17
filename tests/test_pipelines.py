@@ -8,7 +8,7 @@ def fake_steps(monkeypatch):
     calls = []
 
     def step(name, fail=False):
-        def run():
+        def run(**kwargs):
             calls.append(name)
             if fail:
                 raise RuntimeError(f"{name} broke")

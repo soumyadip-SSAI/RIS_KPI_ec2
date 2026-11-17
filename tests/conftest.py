@@ -38,6 +38,22 @@ class FakeS3:
         with open(path, "rb") as f:
             self.objects[f"{bucket}/{key}"] = f.read()
 
+    deny_list = False  # True: list_objects_v2 is refused (role without s3:ListBucket)
+
+    def get_paginator(self, op):
+        assert op == "list_objects_v2"
+        fake = self
+
+        class Paginator:
+            def paginate(self, Bucket, Prefix):
+                if fake.deny_list:
+                    raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Denied"}}, "ListObjectsV2")
+                keys = sorted(k.split("/", 1)[1] for k in fake.objects if k.startswith(f"{Bucket}/{Prefix}"))
+                # two pages, like a real paginator on a large prefix
+                half = len(keys) // 2
+                return [{"Contents": [{"Key": k} for k in part]} if part else {} for part in (keys[:half], keys[half:])]
+        return Paginator()
+
 
 @pytest.fixture
 def fake_s3(monkeypatch):

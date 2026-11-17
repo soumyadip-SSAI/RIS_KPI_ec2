@@ -3,7 +3,7 @@
   load_silver_table  silver_status   every column as raw text, so the table is written back unchanged
   load_table         intermediate    phase / cycle as '2' (not '2.0'), upc as text; optional tables
   load_defect_table  view            as load_table, plus detected_on as a date; can read only some columns
-  load_intermediate  view            final_intermediate.csv
+  load_intermediate  view            final_intermediate (newest saved copy)
 """
 import logging
 
@@ -74,15 +74,9 @@ def load_defect_table(input_dir, name, columns=None):
     return df
 
 
-def load_intermediate(directory, name):
-    """final_intermediate (Databricks: <OUTPUT_SCHEMA>.final_intermediate) from the intermediate step."""
-    try:
-        path = find_table_file(directory, name)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Intermediate table {name} not found in {directory}. Run `ris-kpi ris-view --step intermediate` first "
-            "or change RisView.INTERMEDIATE_DIR in ris_kpi/config.py."
-        ) from None
+def load_intermediate(path):
+    """final_intermediate (Databricks: <OUTPUT_SCHEMA>.final_intermediate) from the intermediate step: the newest
+    saved copy (common/storage.require_latest)."""
     df = _normalize_keys(read_table_file(path))
     df["defect_detected_on"] = to_date(df["defect_detected_on"])
     log.info("final_intermediate loaded — %s rows (from %s)", f"{len(df):,}", path)

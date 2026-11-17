@@ -1,4 +1,4 @@
-"""Row filters: UPC / pavement_type on the silver tables, project-master UPCs on the KPI rows."""
+"""Row filters: UPC / pavement_type on the silver tables, master_upc_project UPCs on the KPI rows."""
 import logging
 
 from ris_kpi.common.keys import upc_slash
@@ -41,7 +41,7 @@ def log_table_summary(tables):
 
 
 def filter_contract_upcs(df, cm_upcs):
-    """Drop rows whose UPC is not in the contract-module project master (skipped when None)."""
+    """Drop rows whose UPC is not in master_upc_project (skipped when None)."""
     if cm_upcs is None:
         return df
     missing_mask = ~df["UPC"].isin(cm_upcs)

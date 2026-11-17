@@ -7,6 +7,8 @@ Per table (notebook cells 6-10):
   3) final_status:        'Closed' if current_status is CLOSED / CANCELLED, 'Open' for any other status and when
                           there is no current_status (no DB case = not closed), so it is never null
 Both joins are left joins on keys that must be unique on the DB side, so no silver row is duplicated or lost.
+
+Rows of a new survey (INSERT, ris_view/incremental.py) get final_status 'Open' without a DB lookup (add_open_status).
 """
 import logging
 
@@ -84,6 +86,17 @@ def add_status(silver, defect_collection, udm_defect_reference, cases, silver_ke
     log.info("  %-28s (on %s) defect_reference_id: %s / %s | final_status: %s",
              defect_collection, silver_key, f"{int(out['defect_reference_id'].notna().sum()):,}", f"{len(out):,}",
              ", ".join(f"{'null' if pd.isna(k) else k}={v:,}" for k, v in counts.items()))
+    return out
+
+
+def add_open_status(silver, label):
+    """New survey (not in ris_view_data yet): no DB lookup — defect_reference_id / current_status empty,
+    final_status 'Open' on every row. Same columns and order as add_status."""
+    status = pd.DataFrame({"defect_reference_id": pd.NA, "current_status": pd.NA, "final_status": "Open"},
+                          index=silver.index)
+    rest = [c for c in silver.columns if c not in ["id"] + STATUS_COLUMNS]
+    out = pd.concat([silver[["id"]], status, silver[rest]], axis=1)
+    log.info("  %-28s new surveys: %s rows | final_status: Open (no DB lookup)", label, f"{len(out):,}")
     return out
 
 

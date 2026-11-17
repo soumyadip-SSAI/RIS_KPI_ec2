@@ -2,7 +2,8 @@
 
     ris-kpi run                                  # ris_view -> ris_trends (full KPI creation)
     ris-kpi run --keep-going                     # still run ris_trends when ris_view fails
-    ris-kpi ris-view [--step silver-status intermediate view]   # also the run for "only statuses changed"
+    ris-kpi status-update                        # only defect statuses changed: RIS view (scenario 2 / 1)
+    ris-kpi ris-view [--step silver-status intermediate view]   # RIS view; --step: those steps only (UPDATE)
     ris-kpi ris-trends
     ris-kpi compare OLD_DIR NEW_DIR              # before/after output check
 
@@ -19,24 +20,28 @@ log = logging.getLogger("ris_kpi")
 
 def _build_parser():
     from ris_kpi import pipelines, ris_view
+    from ris_kpi.tools.compare_outputs import DEFAULT_IGNORE
 
-    parser = argparse.ArgumentParser(prog="ris-kpi", description="RIS KPI pipelines (ris_view_dw, ris_trends_dw).")
+    parser = argparse.ArgumentParser(prog="ris-kpi", description="RIS KPI pipelines (ris_view_data, ris_trends_data).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="full KPI creation: ris_view -> ris_trends")
     run.add_argument("--only", nargs="+", choices=list(pipelines.STEPS), help="run only these steps")
     run.add_argument("--keep-going", action="store_true", help="continue with independent steps after a failure")
 
-    rv = sub.add_parser("ris-view", help="run the RIS view steps (reads the latest defect statuses from S3)")
-    rv.add_argument("--step", nargs="+", choices=list(ris_view.STEPS), help="run only these steps (default: all)")
+    sub.add_parser("status-update", help="defect statuses changed in the DB: refresh ris_view_data (same as ris-view)")
+
+    rv = sub.add_parser("ris-view", help="run the RIS view (scenario 1 / 2, reads the latest defect statuses from S3)")
+    rv.add_argument("--step", nargs="+", choices=list(ris_view.STEPS),
+                    help="run only these steps, in UPDATE mode for all surveys (default: the full scenario run)")
 
     sub.add_parser("ris-trends", help="run the RIS trends KPI")
 
     cmp_ = sub.add_parser("compare", help="compare two output_data folders (before/after a code change)")
     cmp_.add_argument("old_dir")
     cmp_.add_argument("new_dir")
-    cmp_.add_argument("--ignore-columns", nargs="*", default=["populated_on"],
-                      help="columns left out of the comparison (default: populated_on)")
+    cmp_.add_argument("--ignore-columns", nargs="*", default=list(DEFAULT_IGNORE),
+                      help=f"columns left out of the comparison (default: {' '.join(DEFAULT_IGNORE)})")
     cmp_.add_argument("--sort-rows", action="store_true", help="compare rows regardless of their order")
     return parser
 
@@ -54,8 +59,8 @@ def main(argv=None):
         if args.command == "run":
             results = pipelines.run_full(only=args.only, keep_going=args.keep_going)
             ok = all(status == "OK" for status, _, _ in results.values())
-        elif args.command == "ris-view":
-            run_ris_view(args.step)
+        elif args.command in ("ris-view", "status-update"):
+            run_ris_view(getattr(args, "step", None))
             ok = True
         elif args.command == "ris-trends":
             run_ris_trends()
